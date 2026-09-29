@@ -1,16 +1,14 @@
 """
-Tests de la lógica de métricas, con foco en la regla de "conversación confirmada".
+Tests de la lógica de métricas sobre el dataset real (esquema agregado por hora/agente).
 
-Se prueban los tres caminos que más se defienden en vivo:
-  1. Disposición humana apropiada -> confirmada (aunque tenga pocos turnos).
-  2. >= 4 turnos con speaker válido -> confirmada (aunque no haya disposición).
-  3. carrier "answered" sin turnos ni disposición -> NO confirmada.
-Más un test de que la limpieza excluye y contabiliza los datos no confiables.
+Foco:
+  1. Regla de "confirmada" a nivel fila (disposición humana o >=4 turnos; carrier no cuenta).
+  2. Reglas de negocio de data_notes.json: excluir cuenta no-persona, callback != cita.
+  3. Marcado de datos no confiables.
 """
 
 import os
 import sys
-from datetime import datetime
 
 import pandas as pd
 
@@ -19,64 +17,71 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import metrics  # noqa: E402
 
 
-# --- 1. Regla de confirmación: disposición humana ---
-
-def test_disposicion_humana_confirma_con_pocos_turnos():
-    # 1 turno, pero disposición humana apropiada -> confirmada
-    assert metrics.is_confirmed_conversation("sale_closed", valid_turns=1) is True
-    assert metrics.is_confirmed_conversation("appointment_set", valid_turns=0) is True
-    # también acepta mayúsculas / espacios
-    assert metrics.is_confirmed_conversation(" Wrong_Number ", valid_turns=0) is True
+NOTES = {
+    "timezone": "America/New_York",
+    "known_entities": {"PBG Billing": "non_person_account"},
+    "shared_phone_pair": ["Carlos", "Diego"],
+    "warning": "Callbacks are not appointments.",
+}
 
 
-# --- 2. Regla de confirmación: densidad de diálogo ---
-
-def test_cuatro_turnos_confirman_sin_disposicion():
-    assert metrics.is_confirmed_conversation("", valid_turns=4) is True
-    assert metrics.is_confirmed_conversation(None, valid_turns=10) is True
-    # 3 turnos NO alcanzan el umbral
-    assert metrics.is_confirmed_conversation("", valid_turns=3) is False
-
-
-# --- 3. "answered" no prueba conversación ---
-
-def test_answered_sin_turnos_ni_disposicion_no_confirma():
-    # Simula una llamada answered con 0 turnos válidos y sin disposición
-    assert metrics.is_confirmed_conversation("", valid_turns=0) is False
-    assert metrics.is_confirmed_conversation("no_disposition", valid_turns=0) is False
-    assert metrics.is_confirmed_conversation("voicemail", valid_turns=2) is False
+def _row(**kw):
+    base = {
+        "timestamp_utc": "2026-09-15T14:30:00Z", "agent": "Ana", "dials": "10",
+        "carrier_answered": "5", "speaker_turns": "0", "disposition": "no_answer",
+        "appointment_type": "none", "premium_screen": "0", "applications": "0",
+        "sales": "0", "ad_spend": "1.0",
+    }
+    base.update(kw)
+    return base
 
 
-# --- 4. Limpieza registra y excluye datos no confiables ---
+# --- 1. Regla de confirmación ---
 
-def test_clean_excluye_duplicados_y_timestamps_imposibles():
-    conv = pd.DataFrame([
-        # válida
-        {"conversation_id": "A", "agent": "Ana", "campaign": "X", "carrier_status": "answered",
-         "disposition": "sale_closed", "started_at": "2026-08-01T10:00:00",
-         "ended_at": "2026-08-01T10:05:00", "duration_seconds": "300"},
-        # duplicado de A
-        {"conversation_id": "A", "agent": "Ana", "campaign": "X", "carrier_status": "answered",
-         "disposition": "sale_closed", "started_at": "2026-08-01T10:00:00",
-         "ended_at": "2026-08-01T10:05:00", "duration_seconds": "300"},
-        # ended antes de started
-        {"conversation_id": "B", "agent": "Bruno", "campaign": "Y", "carrier_status": "answered",
-         "disposition": "", "started_at": "2026-08-02T10:00:00",
-         "ended_at": "2026-08-02T09:00:00", "duration_seconds": "3600"},
-        # fecha futura
-        {"conversation_id": "C", "agent": "Carla", "campaign": "Z", "carrier_status": "answered",
-         "disposition": "appointment_set", "started_at": "2027-01-01T10:00:00",
-         "ended_at": "2027-01-01T10:05:00", "duration_seconds": "300"},
+def test_disposicion_humana_confirma():
+    assert metrics.is_confirmed_row("conversation", 0) is True
+    assert metrics.is_confirmed_row("appointment", 1) is True
+
+
+def test_cuatro_turnos_confirman_sin_disposicion_humana():
+    assert metrics.is_confirmed_row("voicemail", 4) is True
+    assert metrics.is_confirmed_row("no_answer", 3) is False
+
+
+def test_answered_no_prueba_conversacion():
+    # carrier "answered" no entra en la regla; una fila answered sin diálogo no confirma
+    assert metrics.is_confirmed_row("no_answer", 0) is False
+    assert metrics.is_confirmed_row("callback", 0) is False
+
+
+# --- 2. Reglas de negocio de data_notes.json ---
+
+def test_excluye_cuenta_no_persona_y_callback_no_es_cita():
+    raw = pd.DataFrame([
+        _row(agent="PBG Billing", disposition="conversation", speaker_turns="6"),  # se excluye
+        _row(agent="Ana", disposition="appointment", appointment_type="appointment",
+             sales="1", applications="1"),                                          # cita real
+        _row(agent="Luis", disposition="callback", appointment_type="appointment"),  # callback != cita
     ])
-    turns = pd.DataFrame([
-        {"conversation_id": "A", "turn_index": "0", "speaker": "agent", "timestamp": "", "text": ""},
+    df, exclusions, flags = metrics.clean(raw, NOTES)
+
+    # PBG Billing fuera
+    assert "PBG Billing" not in set(df["agent"])
+    assert exclusions["cuentas_no_persona"] == 1
+    # Solo 1 cita real (la de Ana); el callback de Luis no cuenta
+    assert int(df["is_real_appointment"].sum()) == 1
+    assert exclusions["callback_marcado_como_cita"] == 1
+    # Flag del teléfono compartido presente
+    assert flags["telefono_compartido"] == ["Carlos", "Diego"]
+
+
+# --- 3. Marcado de datos no confiables ---
+
+def test_marca_answered_sin_dialogo_y_ventas_imposibles():
+    raw = pd.DataFrame([
+        _row(agent="Ana", carrier_answered="8", speaker_turns="0"),          # answered sin diálogo
+        _row(agent="Luis", sales="2", applications="1", disposition="conversation", speaker_turns="5"),  # sales>apps
     ])
-
-    df, exclusions = metrics.clean(conv, turns, now=datetime(2026, 9, 29))
-
-    assert exclusions["duplicados_conversation_id"] == 1
-    assert exclusions["ended_antes_de_started"] == 1
-    assert exclusions["fechas_futuras"] == 1
-    # Solo queda la conversación A válida
-    assert list(df["conversation_id"]) == ["A"]
-    assert bool(df.iloc[0]["is_confirmed"]) is True
+    df, exclusions, flags = metrics.clean(raw, NOTES)
+    assert exclusions["answered_sin_dialogo"] == 1
+    assert exclusions["ventas_mayores_que_solicitudes"] == 1

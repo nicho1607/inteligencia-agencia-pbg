@@ -1,22 +1,21 @@
 # Registro de datos no confiables
 
-> Generado automáticamente por `metrics.py::write_unreliable_report`.
-> Las exclusiones se aplican **en cascada** (en el orden listado), por eso un conteo
-> puede ser menor que en el perfilado crudo: una fila ya retirada por un filtro previo
-> no se vuelve a contar. El objetivo es no doble-contar exclusiones.
+> Generado por `metrics.py::write_unreliable_report`. Las reglas de negocio salen de
+> `data/data_notes.json`, no están hardcodeadas.
 
-- Filas crudas: **627**
-- Filas válidas para análisis: **605**
-- Filas excluidas: **22** (3.5%)
+- Filas crudas: **210**
+- Filas de agentes reales analizadas: **196**
 
-| Motivo de exclusión | Conteo | Descripción |
+| Motivo | Conteo | Descripción |
 |---|---|---|
-| `duplicados_conversation_id` | 12 | Filas duplicadas por conversation_id; se conserva la primera. |
-| `fechas_no_parseables` | 0 | started_at o ended_at no se pudieron interpretar como fecha. |
-| `ended_antes_de_started` | 6 | ended_at anterior a started_at (timestamp imposible). |
-| `fechas_futuras` | 4 | started_at posterior a la fecha de análisis (2026-09-29). |
-| `duracion_negativa` | 0 | duration_seconds menor que cero (valor imposible). |
+| `cuentas_no_persona` | 14 | Filas de cuentas que no son personas reales (p. ej. 'PBG Billing'), excluidas de los rankings de agentes. |
+| `fechas_no_parseables` | 0 | timestamp_utc no interpretable como fecha. |
+| `answered_sin_dialogo` | 66 | carrier_answered > 0 pero speaker_turns = 0: el carrier dice 'contestada' sin diálogo. No cuenta como conversación. |
+| `callback_marcado_como_cita` | 12 | disposition = callback pero appointment_type = appointment. Un callback NO es una cita (data_notes.json). |
+| `ventas_mayores_que_solicitudes` | 48 | sales > applications: dato de negocio inconsistente, se marca para revisión. |
 
-## Nota sobre `answered`
+## Avisos de calidad (no retiran filas, pero afectan la interpretación)
 
-Las llamadas con `carrier_status = answered` NO se excluyen del dataset, pero **no se cuentan como conversación** salvo que cumplan la regla de confirmación. La brecha entre 'answered' y 'confirmadas' se muestra explícitamente en el dashboard (KPI de contacto real).
+- **Teléfono compartido:** ['Carlos', 'Diego'] comparten línea; sus métricas de contacto pueden estar mezcladas.
+- **Nota del dataset:** Callbacks are not appointments.
+- **Overrides de premium:** [{'agent': 'Maria', 'document_premium': 65, 'screen_premium': 89}]

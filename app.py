@@ -1,15 +1,14 @@
 """
 Dashboard "Inteligencia para el Dueño de la Agencia".
 
-Responde en 10 segundos a: "¿qué está pasando realmente en mi negocio?"
-  - KPIs arriba (con definición en tooltip).
-  - Tendencia de conversaciones confirmadas.
-  - Desglose por agente y por campaña.
-  - Panel de Calidad de Datos: qué es confiable y qué se excluyó.
+Responde en 10 segundos: "¿qué está pasando realmente en mi negocio?"
+  - KPIs arriba (definición en tooltip).
+  - Tendencia en el tiempo.
+  - Desglose por agente y por disposición.
+  - Panel de Calidad de Datos: qué es confiable, qué se excluyó y qué se marcó.
 
-Correr con:  streamlit run app.py
-
-Todos los datos son sintéticos.
+Datos: data/activity.csv (agregado por hora/agente). Reglas de negocio: data/data_notes.json.
+Correr:  python -m streamlit run app.py
 """
 
 import streamlit as st
@@ -25,125 +24,131 @@ st.set_page_config(
 
 @st.cache_data
 def load():
-    conv, turns = metrics.load_raw()
-    df, exclusions = metrics.clean(conv, turns)
-    kpis = metrics.compute_kpis(df, conv)
-    return df, exclusions, kpis
+    raw = metrics.load_raw()
+    notes = metrics.load_notes()
+    df, exclusions, flags = metrics.clean(raw, notes)
+    kpis = metrics.compute_kpis(df)
+    return df, exclusions, flags, kpis
 
 
-df, exclusions, kpis = load()
+df, exclusions, flags, kpis = load()
 
 st.title("📞 Inteligencia para el Dueño de la Agencia")
 st.caption(
-    "Datos **sintéticos**. Una conversación se cuenta solo si está **confirmada** "
-    "(disposición humana apropiada **o** ≥ 4 turnos de speakers). "
-    "Un estado de carrier *answered* no prueba una conversación."
+    "Datos **sintéticos** agregados por hora y agente. Una franja se cuenta como actividad "
+    "**confirmada** solo si su disposición es humana (conversation/appointment) **o** tiene "
+    "≥ 4 turnos de speakers. Un carrier *answered* no prueba una conversación."
 )
 
 # ---------------------------------------------------------------------------
-# KPIs con tooltips (definición al pasar el cursor vía help=)
+# KPIs con tooltips
 # ---------------------------------------------------------------------------
 c1, c2, c3, c4 = st.columns(4)
 
 c1.metric(
-    "Conversaciones confirmadas",
-    f"{kpis['conversaciones_confirmadas']}",
-    help="Conversaciones válidas que cumplen la regla: disposición humana apropiada "
-         "O ≥ 4 turnos con speaker válido. Fuente: conversations + turns.",
-)
-
-c2.metric(
     "Tasa de contacto real",
     f"{kpis['tasa_contacto_real']*100:.1f}%",
-    help="De las llamadas que el carrier marcó 'answered', qué proporción fueron "
-         "conversación confirmada. Fórmula: confirmadas_entre_answered / answered_válidas. "
-         f"({kpis['answered_confirmadas']} de {kpis['answered_total']} answered)",
+    help="Del volumen que el carrier marcó 'answered', qué parte ocurre en franjas que además "
+         "son conversación confirmada. Fórmula: answered_en_confirmadas / total_answered. "
+         f"({kpis['answered_en_confirmadas']} de {kpis['total_answered']}).",
 )
-
+c2.metric(
+    "Ventas",
+    f"{kpis['ventas']}",
+    help="Suma de la columna 'sales' de agentes reales. Costo por venta: "
+         f"${kpis['costo_por_venta']} (gasto total / ventas).",
+)
 c3.metric(
-    "Tasa de conversión",
-    f"{kpis['tasa_conversion']*100:.1f}%",
-    help="Proporción de conversaciones confirmadas que terminaron en cita o venta. "
-         "Fórmula: (appointment_set + sale_closed) / confirmadas. "
-         f"({kpis['conversion_confirmadas']} de {kpis['conversaciones_confirmadas']})",
+    "Citas reales",
+    f"{kpis['citas_reales']}",
+    help="Solo cuando disposition='appointment' Y appointment_type='appointment'. "
+         "Un callback NO es una cita (regla de data_notes.json). "
+         f"Costo por cita real: ${kpis['costo_por_cita_real']}.",
 )
-
 c4.metric(
-    "Salud de los datos",
-    f"{kpis['data_health']*100:.1f}%",
-    help="Porcentaje de filas crudas que superan los filtros de confiabilidad "
-         "(sin duplicados, sin timestamps imposibles, sin fechas futuras, sin duración negativa).",
+    "Franjas confirmadas",
+    f"{kpis['franjas_confirmadas']} / {kpis['franjas_totales']}",
+    help="Franjas hora-agente que cumplen la regla de confirmación, sobre el total de "
+         "franjas de agentes reales.",
 )
 
-# Alerta de la brecha answered vs real (el punto del reto)
-gap = kpis["answered_total"] - kpis["answered_confirmadas"]
-if kpis["answered_total"]:
+# Brecha answered vs. real (el punto del reto)
+gap = kpis["total_answered"] - kpis["answered_en_confirmadas"]
+if kpis["total_answered"]:
     st.warning(
-        f"⚠️ **{gap}** llamadas marcadas como *answered* NO son conversación confirmada "
-        f"({gap / kpis['answered_total']*100:.0f}% del total 'answered'). "
-        "Reportar 'answered' como conversaciones sobreestimaría la actividad real."
+        f"⚠️ **{gap}** llamadas 'answered' ocurren fuera de conversaciones confirmadas "
+        f"({gap / kpis['total_answered']*100:.0f}% del total 'answered'). "
+        "Tratar 'answered' como conversación sobreestimaría la actividad real."
+    )
+
+# Aviso sobre citas si el dato es escaso/inconsistente
+if kpis["citas_reales"] <= kpis["ventas"] / 5:
+    st.info(
+        f"ℹ️ Solo **{kpis['citas_reales']}** citas cumplen la definición estricta (appointment + "
+        "appointment_type=appointment). El campo `appointment_type` es inconsistente con "
+        "`disposition`, así que el dato de citas es **poco confiable** y no se debe usar para metas."
     )
 
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Tendencia + desgloses
+# Tendencia + disposición
 # ---------------------------------------------------------------------------
 left, right = st.columns([2, 1])
 
 with left:
-    st.subheader("Tendencia de conversaciones confirmadas")
+    st.subheader("Tendencia por día (hora local)")
     trend = metrics.trend_by_day(df).set_index("date")
-    st.line_chart(trend, y="confirmadas", height=280)
-    st.caption("Confirmadas por día. Las fechas futuras excluidas no aparecen aquí.")
+    st.line_chart(trend, height=280)
+    st.caption("Franjas confirmadas, ventas y citas reales por día (America/New_York).")
 
 with right:
-    st.subheader("Por campaña")
-    camp = metrics.by_campaign(df)
-    st.dataframe(
-        camp.rename(columns={"conversion_%": "conversión %"}),
-        hide_index=True,
-        use_container_width=True,
-    )
-    st.caption("Calidad de lead: confirmadas y conversión por campaña.")
+    st.subheader("Resultados por disposición")
+    st.dataframe(metrics.by_disposition(df), hide_index=True, use_container_width=True)
+    st.caption("Distribución de la columna disposition en franjas de agentes reales.")
 
 st.subheader("Desempeño por agente")
 agent = metrics.by_agent(df)
-st.dataframe(
-    agent.rename(columns={"conversion_%": "conversión %"}),
-    hide_index=True,
-    use_container_width=True,
-)
-st.bar_chart(agent.set_index("agent"), y="confirmadas", height=260)
+st.dataframe(agent, hide_index=True, use_container_width=True)
+st.bar_chart(agent.set_index("agent"), y="ventas", height=260)
+
+# Aviso de teléfono compartido
+pair = flags.get("telefono_compartido")
+if pair:
+    st.caption(
+        f"⚠️ {pair[0]} y {pair[1]} comparten línea telefónica: sus métricas de contacto "
+        "(dials/answered) pueden estar mezcladas y no son directamente comparables."
+    )
 
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Panel de Calidad de Datos (qué es confiable y qué se excluyó)
+# Panel de Calidad de Datos
 # ---------------------------------------------------------------------------
 st.subheader("🔎 Calidad de datos: qué es confiable y qué no")
 
-total_raw = exclusions["_total_crudo"]
-total_valid = exclusions["_total_valido"]
 q1, q2, q3 = st.columns(3)
-q1.metric("Filas crudas", total_raw)
-q2.metric("Filas válidas (usadas)", total_valid)
-q3.metric("Filas excluidas", total_raw - total_valid)
+q1.metric("Filas crudas", exclusions["_total_crudo"])
+q2.metric("Agentes reales (filas)", exclusions["_filas_analizadas"])
+q3.metric("Cuentas no-persona excluidas", exclusions["cuentas_no_persona"])
 
-reason_labels = {
-    "duplicados_conversation_id": "Duplicados (mismo conversation_id)",
-    "fechas_no_parseables": "Fechas no interpretables",
-    "ended_antes_de_started": "Fin anterior al inicio (imposible)",
-    "fechas_futuras": "Fechas en el futuro",
-    "duracion_negativa": "Duración negativa",
-}
 rows = [
-    {"Motivo de exclusión": label, "Conteo": exclusions.get(key, 0)}
-    for key, label in reason_labels.items()
+    {"Señal de calidad": "carrier 'answered' sin diálogo (turns=0)",
+     "Conteo": exclusions["answered_sin_dialogo"],
+     "Efecto": "No cuenta como conversación"},
+    {"Señal de calidad": "callback marcado como cita",
+     "Conteo": exclusions["callback_marcado_como_cita"],
+     "Efecto": "Excluido de citas reales"},
+    {"Señal de calidad": "ventas > solicitudes (imposible)",
+     "Conteo": exclusions["ventas_mayores_que_solicitudes"],
+     "Efecto": "Marcado para revisión"},
+    {"Señal de calidad": "cuentas no-persona (PBG Billing)",
+     "Conteo": exclusions["cuentas_no_persona"],
+     "Efecto": "Excluido de rankings de agentes"},
 ]
 st.table(rows)
 st.caption(
-    "Exclusiones aplicadas en cascada (no se doble-cuentan). Detalle en "
-    "`docs/datos_no_confiables.md`. Además, las llamadas 'answered' que no cumplen la regla "
-    "se conservan pero no se cuentan como conversación."
+    "Reglas de negocio tomadas de `data/data_notes.json` (no hardcodeadas). Detalle en "
+    "`docs/datos_no_confiables.md`. Nota del dataset: "
+    f"\"{flags.get('nota', '')}\""
 )

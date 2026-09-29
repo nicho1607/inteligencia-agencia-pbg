@@ -1,0 +1,18 @@
+{
+  "timezone": "America/New_York",
+  "known_entities": {
+    "PBG Billing": "non_person_account"
+  },
+  "shared_phone_pair": [
+    "Carlos",
+    "Diego"
+  ],
+  "carrier_document_premium_overrides": [
+    {
+      "agent": "Maria",
+      "document_premium": 65,
+      "screen_premium": 89
+    }
+  ],
+  "warning": "Callbacks are not appointments."
+}
