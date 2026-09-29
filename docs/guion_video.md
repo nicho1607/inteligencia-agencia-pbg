@@ -1,37 +1,40 @@
 # Guion de video (máximo 2 minutos)
 
-Objetivo: problema → decisiones → demo → qué sigue. Ritmo ágil, sin leer de corrido.
+Problema → decisiones → demo → qué sigue. Ritmo ágil.
 
 ---
 
 **[0:00–0:20] Problema**
 
-"El dueño de una agencia quiere saber en 10 segundos qué está pasando en su negocio. El reto:
-no podemos confiar ciegamente en los datos. El caso más claro: el carrier marca una llamada como
-'answered', pero eso solo dice que la línea se conectó, no que hubo una conversación real."
+"El dueño de una agencia quiere saber en 10 segundos qué pasa en su negocio, pero no todos los datos
+son confiables. El caso más claro: el carrier marca llamadas como 'answered', pero eso solo dice que
+la línea se conectó, no que hubo conversación."
 
-**[0:20–0:45] Decisión central**
+**[0:20–0:45] Decisiones**
 
-"Así que definí una regla explícita de **conversación confirmada**: cuenta solo si tiene una
-disposición humana apropiada, o al menos 4 turnos de diálogo. Todo lo que no es confiable
-—duplicados, fechas imposibles, duraciones negativas— se excluye y se registra. Nada se esconde."
+"Definí actividad **confirmada** con una regla explícita: disposición humana, o al menos 4 turnos de
+diálogo. El carrier no cuenta. Y las reglas de negocio no las inventé: las leí del propio paquete,
+del `data_notes.json` — por ejemplo, 'PBG Billing' no es una persona, así que lo saco de los
+rankings, y un callback nunca cuenta como cita."
 
-**[0:45–1:30] Demo (pantalla)**
+**[0:45–1:35] Demo (pantalla)**
 
-- "Arriba, los KPIs. Cada uno tiene su definición en el tooltip." (pasar el cursor)
-- "Mira esta alerta: de 420 llamadas 'answered', 136 NO son conversación real. Reportar 'answered'
-  como conversaciones infla la actividad un 32%."
-- "Tendencia de confirmadas por día, desglose por campaña y por agente con citas y ventas."
-- "Y aquí abajo, el panel de calidad de datos: 627 filas crudas, 605 válidas, con el detalle de
-  qué excluí y por qué."
+- "Arriba los KPIs, cada uno con su definición en el tooltip."
+- "Mira esta alerta: solo el 61% de las llamadas 'answered' son conversación confirmada. Tratar
+  'answered' como conversaciones infla la actividad."
+- "Y este aviso: bajo la definición estricta solo hay 7 citas reales, porque el campo
+  appointment_type contradice a disposition. Así que el dato de citas lo marco como no confiable en
+  vez de esconderlo."
+- "Tendencia por día, desglose por agente y por disposición, y abajo el panel de calidad de datos:
+  210 filas crudas, 196 de agentes reales, y cada problema detectado con su conteo."
 
-**[1:30–1:50] Confianza / tests**
+**[1:35–1:50] Confianza / tests**
 
-"La lógica está separada de la interfaz y cubierta con tests: la regla de confirmación y las
-exclusiones. Corre con un solo comando y se despliega gratis en Streamlit Cloud."
+"La lógica está separada de la interfaz y cubierta con 5 tests: la regla de confirmación, la
+exclusión de la cuenta no-persona y que un callback no es cita. Corre con un solo comando."
 
 **[1:50–2:00] Qué sigue**
 
-"Con más tiempo: filtros por fecha y agente, tiempo de primera respuesta, y ROI por campaña
-sumando costos. Pero lo esencial ya responde la pregunta del dueño con datos en los que puede
-confiar."
+"Con más tiempo reconciliaría disposition contra appointment_type con el equipo de datos, y añadiría
+filtros por fecha y agente. Pero lo esencial ya responde la pregunta del dueño con datos en los que
+puede confiar, y dice claramente en cuáles no."

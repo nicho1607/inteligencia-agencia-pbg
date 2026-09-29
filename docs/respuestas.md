@@ -29,21 +29,22 @@ _(pendiente)_
 ## Borradores reutilizables (por si aplican)
 
 **¿Qué métricas definiste y por qué?**
-Ver `docs/metricas.md`. Prioricé las que un dueño usa para decidir: cuántas conversaciones reales
-hubo, qué tan confiable es el "answered", conversión sobre conversaciones reales, y desempeño por
-agente y campaña. Cada una declara definición, fórmula, fuente, filtros y límites.
+Ver `docs/metricas.md`. Prioricé las que un dueño usa para decidir: tasa de contacto real vs.
+"answered", ventas y costo por venta, citas reales y su costo, franjas confirmadas, desempeño por
+agente y distribución por disposición. Cada una declara definición, fórmula, fuente, filtros y
+límites.
 
 **¿Cómo manejaste los datos poco confiables?**
-Definí filtros de confiabilidad (duplicados, timestamps imposibles, fechas futuras, duración
-negativa) que se aplican en cascada y se registran en `docs/datos_no_confiables.md` y en el panel de
-calidad del dashboard. "answered" se conserva pero no cuenta como conversación salvo que cumpla la
-regla de confirmación.
+Las reglas de negocio salen de `data/data_notes.json` (cuenta no-persona, callback no es cita,
+teléfono compartido). Marco/excluyo: 'answered' sin diálogo (no cuenta como conversación), callbacks
+marcados como cita (fuera de citas reales), ventas>solicitudes (revisión), y la cuenta 'PBG Billing'
+(fuera de rankings). Todo queda en `docs/datos_no_confiables.md` y en el panel de calidad.
 
 **¿Qué asumiste?**
-Que "disposición humana apropiada" son los resultados que implican contacto humano real
-(cita, venta, callback, no-interesado, número equivocado). Que el umbral de 4 turnos aplica sobre
-turnos con speaker válido. Que "hoy" es 2026-09-29 para detectar fechas futuras.
+Que "disposición humana apropiada" son `conversation` y `appointment`. Que la regla de 4 turnos
+aplica sobre `speaker_turns` de la franja (el dato es agregado por hora/agente, no por conversación).
+Que una cita solo es real si `disposition=appointment` y `appointment_type=appointment`.
 
 **¿Qué harías con más tiempo?**
-Filtros interactivos, tiempo de primera respuesta, ROI por campaña con costos, validación de esquema
-y CI. Ver README.
+Reconciliar `disposition` vs `appointment_type` con el equipo de datos, filtros interactivos,
+normalizar por leads asignados, validación de esquema y CI. Ver README.

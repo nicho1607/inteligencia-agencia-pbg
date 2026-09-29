@@ -1,55 +1,43 @@
-# Fase 1 — Exploración y calidad de datos
+# Fase 1 — Exploración y calidad de datos (dataset real)
 
-> **Todos los datos son sintéticos.** No hay información real de clientes. El dataset se genera
-> con `data/generate_data.py` (semilla fija = reproducible) e inyecta problemas de calidad a
-> propósito para poner a prueba el pipeline. El perfilado se produce con `data/profile_data.py`.
+> Datos sintéticos provistos por el reto. Perfilado con `data/profile_real.py` (solo lectura).
 
 ## Qué hay en el paquete
 
-Dos tablas relacionadas por `conversation_id`:
+- **`data/activity.csv`** — 210 filas, **agregado por franja horaria + agente**
+  (15 agentes × 14 franjas). Columnas: `timestamp_utc, agent, dials, carrier_answered,
+  speaker_turns, disposition, appointment_type, premium_screen, applications, sales, ad_spend`.
+- **`data/data_notes.json`** — reglas de negocio y notas de calidad (zona horaria, cuenta
+  no-persona, teléfono compartido, overrides de premium, "callbacks no son citas").
 
-**`conversations.csv`** (627 filas) — una fila por conversación:
+Rango de fechas: **2026-09-15 a 2026-09-28** (hora UTC). Zona real: America/New_York.
 
-| Columna | Tipo observado | Descripción |
-|---|---|---|
-| `conversation_id` | texto | ID de la conversación (clave) |
-| `agent` | texto | Agente asignado (6 valores) |
-| `campaign` | texto | Campaña de origen (5 valores) |
-| `carrier_status` | texto | Estado técnico de la telefonía: answered, no-answer, busy, failed, voicemail |
-| `disposition` | texto (nullable) | Resultado marcado por el humano (puede estar vacío) |
-| `started_at` | ISO datetime | Inicio |
-| `ended_at` | ISO datetime | Fin |
-| `duration_seconds` | número | Duración reportada |
+## Estado "limpio" del dato base
 
-**`turns.csv`** (2825 filas) — una fila por turno de habla:
-
-| Columna | Tipo | Descripción |
-|---|---|---|
-| `conversation_id` | texto | FK a conversations |
-| `turn_index` | entero | Orden del turno |
-| `speaker` | texto | agent / customer (puede estar vacío) |
-| `timestamp` | ISO datetime | Momento del turno |
-| `text` | texto | Contenido (placeholder sintético) |
+Sorprendentemente **no hay** nulos, duplicados de filas, timestamps imposibles ni valores
+negativos. Los problemas no están en el formato: están en la **semántica** (contradicciones entre
+columnas y con las reglas de negocio).
 
 ## Problemas de calidad detectados
 
-| Problema | Conteo | Impacto en métricas |
+| Problema | Conteo | Por qué importa |
 |---|---|---|
-| **Disposiciones vacías** | 146 (23%) | No se puede confiar en la disposición como única prueba de conversación |
-| **Duplicados** por `conversation_id` | 12 ids (12 filas extra) | Inflan conteos y conversión si no se deduplican |
-| **`ended_at` < `started_at`** | 7 | Timestamps imposibles; duración/tiempos no confiables en esas filas |
-| **`started_at` en el futuro** (> 2026-09-29) | 5 | Fechas imposibles; contaminan tendencias |
-| **Duración negativa** | 8 | Valor imposible; se excluye del cálculo de duración |
-| **Turnos sin speaker** | 5 | No cuentan como turno válido para la regla de confirmación |
-| **`answered` con 0 turnos** (contradicción dura) | 33 | "answered" NO prueba conversación |
-| **`answered` con 1–3 turnos** (no concluyente) | 107 | Contactó pero no alcanza el umbral de ≥4 turnos |
-
-Rango de fechas válidas: **2026-08-01** a la práctica; hay outliers hasta 2027-07 (los 5 futuros).
+| **`carrier_answered > 0` con `speaker_turns = 0`** | 71 (66 sin PBG Billing) | El carrier dice "contestada" sin diálogo: no es conversación |
+| **`PBG Billing` tratado como agente** | 14 filas | Es `non_person_account`: contamina rankings de agentes |
+| **`disposition=callback` marcado `appointment_type=appointment`** | 13 (12 sin PBG) | Un callback no es una cita (regla explícita) |
+| **`disposition=appointment` con `appointment_type` inconsistente** | 23 (callback 12, none 11) | Solo 10 appointments son internamente consistentes |
+| **`sales > applications`** | 51 (48 sin PBG) | Venta sin solicitud: dato imposible, se marca |
+| **Teléfono compartido Carlos/Diego** | — | Métricas de contacto potencialmente mezcladas |
 
 ## Conclusión clave para el negocio
 
-De **436** llamadas marcadas como `answered` por el carrier, **140** (33 con 0 turnos + 107 con 1–3
-turnos) **no representan una conversación real** según la regla del reto. Reportar "answered" como
-"conversaciones" sobreestimaría la actividad real en ~32%. Por eso definimos **conversación
-confirmada** con una regla explícita (ver `docs/metricas.md`) y separamos siempre lo confiable de
-lo no confiable en un panel de Calidad de Datos.
+Dos señales que el dueño no debería usar tal cual:
+
+1. **"answered" no es contacto real.** Solo el **61%** del volumen `answered` cae en franjas
+   confirmadas como conversación. Reportar "answered" como conversaciones infla la actividad.
+2. **El dato de citas es poco confiable.** Bajo la definición estricta (appointment +
+   appointment_type=appointment) solo hay **7 citas reales**, porque `appointment_type` contradice a
+   `disposition` en decenas de filas. No se debe fijar metas de citas sobre este campo hasta
+   corregir el origen.
+
+Ambas se muestran explícitamente en el panel de Calidad de Datos del dashboard, no se esconden.

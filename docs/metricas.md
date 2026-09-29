@@ -2,94 +2,99 @@
 
 > **Principio rector:** no confiamos ciegamente en los datos. Cada métrica declara su
 > definición, fórmula, fuente, filtros de confiabilidad y limitaciones **antes** de mostrarse.
-> Los datos que no son confiables se excluyen y se registran (ver `docs/datos_no_confiables.md`,
-> generado por `metrics.py`).
+> Lo no confiable se excluye o se marca y se registra (ver `docs/datos_no_confiables.md`).
+> Las reglas de negocio salen de `data/data_notes.json`, **no** están hardcodeadas.
 
-## Concepto central: Conversación CONFIRMADA
+## El dato
 
-Una conversación se considera **confirmada** solo si cumple **al menos una** de estas condiciones:
+`data/activity.csv` está **agregado por franja horaria + agente** (no una fila por conversación).
+Cada fila resume una hora de un agente:
 
-- **(a) Disposición humana apropiada:** `disposition` ∈ {`appointment_set`, `sale_closed`,
-  `callback_scheduled`, `not_interested`, `wrong_number`}. Estas marcan que un humano habló y
-  registró un resultado.
-- **(b) Densidad de diálogo:** la conversación tiene **≥ 4 turnos con speaker válido** (speaker no
-  vacío) en `turns.csv`.
+| Columna | Descripción |
+|---|---|
+| `timestamp_utc` | Inicio de la franja (UTC; la zona real es America/New_York) |
+| `agent` | Agente (incluye la cuenta no-persona `PBG Billing`) |
+| `dials` | Llamadas marcadas |
+| `carrier_answered` | Llamadas que el carrier reportó como contestadas |
+| `speaker_turns` | Turnos de habla en la franja |
+| `disposition` | Resultado: conversation, appointment, callback, voicemail, no_answer |
+| `appointment_type` | appointment / callback / none |
+| `premium_screen` | Prima de la pantalla |
+| `applications` | Solicitudes |
+| `sales` | Ventas |
+| `ad_spend` | Gasto publicitario |
 
-Un `carrier_status = "answered"` **NO** prueba una conversación por sí solo: el carrier solo dice
-que la línea se conectó, no que hubo diálogo. Esta es la decisión más importante del reto.
+## Concepto central: actividad CONFIRMADA
 
-Regla implementada en `metrics.py::is_confirmed_conversation`.
+Como el dato es agregado, aplicamos la regla del reto a nivel de franja. Una franja cuenta como
+**confirmada** si:
 
----
+- **(a)** su `disposition` es una **disposición humana apropiada**: `conversation` o `appointment`, **o**
+- **(b)** tiene **≥ 4 `speaker_turns`**.
 
-## Filtros base de confiabilidad (se aplican antes de cualquier métrica)
+`carrier_answered` **no** entra en la regla: contestar no prueba que hubo conversación.
+Implementado en `metrics.py::is_confirmed_row`.
 
-Una conversación entra al análisis solo si es **válida**:
+## Reglas de negocio aplicadas (de `data_notes.json`)
 
-1. `conversation_id` no duplicado (nos quedamos con la primera aparición).
-2. `started_at` y `ended_at` parseables.
-3. `ended_at >= started_at` (sin timestamps imposibles).
-4. `started_at <= hoy` (2026-09-29) — sin fechas futuras.
-5. `duration_seconds >= 0`.
+- **`PBG Billing` es `non_person_account`** → se excluye de los rankings de agentes.
+- **"Callbacks are not appointments"** → una `disposition=callback` **nunca** cuenta como cita,
+  aunque `appointment_type` diga `appointment`.
+- **Teléfono compartido `[Carlos, Diego]`** → se advierte: sus métricas de contacto pueden mezclarse.
+- **Override de premium para Maria** → documentado; no altera los conteos de negocio.
 
-Las filas que fallan estos filtros se **excluyen** y quedan contabilizadas en el registro de datos
-no confiables. Los turnos con `speaker` vacío no cuentan para la regla (b).
+## Filtros / marcas de confiabilidad
+
+| Señal | Tratamiento |
+|---|---|
+| `carrier_answered > 0` y `speaker_turns = 0` | No cuenta como conversación; se registra |
+| `disposition = callback` con `appointment_type = appointment` | Excluido de citas reales; se registra |
+| `sales > applications` (imposible) | Se marca para revisión |
+| Cuenta no-persona | Excluida de agentes |
 
 ---
 
 ## Métricas para el dueño de la agencia
 
-### 1. Conversaciones confirmadas
-- **Definición:** número de conversaciones válidas que cumplen la regla de confirmación.
-- **Fórmula:** `COUNT(conversaciones válidas donde is_confirmed = true)`
-- **Fuente:** `conversations.csv` + `turns.csv`.
-- **Filtros:** filtros base + regla de confirmación.
-- **Limitaciones:** depende de la calidad de `disposition` y del conteo de turnos; una conversación
-  real muy corta sin disposición no se cuenta (falso negativo consciente y conservador).
+### 1. Tasa de contacto real vs. "answered"
+- **Definición:** qué parte del volumen `answered` ocurre en franjas que además son conversación confirmada.
+- **Fórmula:** `sum(carrier_answered en confirmadas) / sum(carrier_answered)`
+- **Fuente:** `carrier_answered` + regla de confirmación.
+- **Limitaciones:** es agregado; no distingue conversación por llamada individual. Mide la brecha señal-realidad.
 
-### 2. Tasa de contacto real vs. "answered"
-- **Definición:** qué proporción de las llamadas que el carrier marcó como `answered` fueron en
-  realidad una conversación confirmada.
-- **Fórmula:** `confirmadas_entre_answered / total_answered_válidas`
-- **Fuente:** `carrier_status` + regla de confirmación.
-- **Filtros:** filtros base; denominador = answered válidas.
-- **Limitaciones:** mide la brecha entre la señal técnica y la realidad; no juzga la calidad del
-  agente, solo la fiabilidad del estado del carrier.
+### 2. Ventas y costo por venta
+- **Definición:** ventas totales y gasto publicitario por venta.
+- **Fórmula:** `sum(sales)`; `sum(ad_spend) / sum(sales)`
+- **Fuente:** `sales`, `ad_spend`.
+- **Limitaciones:** no atribuye el gasto a la venta específica; es promedio agregado.
 
-### 3. Tasa de conversión (citas + ventas)
-- **Definición:** proporción de conversaciones confirmadas que terminaron en cita o venta.
-- **Fórmula:** `COUNT(disposition ∈ {appointment_set, sale_closed}) / conversaciones_confirmadas`
-- **Fuente:** `disposition`.
-- **Filtros:** solo sobre confirmadas (no sobre el total, para no diluir con no-contactos).
-- **Limitaciones:** `appointment_set` no garantiza asistencia; `sale_closed` no incluye monto.
+### 3. Citas reales y costo por cita
+- **Definición:** franjas con cita genuina (disposition=appointment **y** appointment_type=appointment).
+- **Fórmula:** `count(is_real_appointment)`; `sum(ad_spend)/citas_reales`
+- **Fuente:** `disposition`, `appointment_type`.
+- **Limitaciones:** el campo `appointment_type` es inconsistente con `disposition`, así que el conteo
+  estricto es bajo y **poco confiable** para fijar metas (se advierte en el dashboard).
 
-### 4. Citas y ventas por agente
-- **Definición:** volumen de resultados de negocio (citas, ventas) por agente.
-- **Fórmula:** `GROUP BY agent → COUNT(appointment_set), COUNT(sale_closed)` sobre confirmadas.
-- **Fuente:** `agent` + `disposition`.
-- **Limitaciones:** no normaliza por número de leads asignados; comparar con volumen, no solo total.
+### 4. Franjas confirmadas
+- **Definición:** franjas hora-agente que cumplen la regla de confirmación.
+- **Fórmula:** `count(is_confirmed)` sobre agentes reales.
+- **Limitaciones:** unidad = franja, no conversación individual.
 
-### 5. Rendimiento por campaña (calidad de lead)
-- **Definición:** para cada campaña, conversaciones confirmadas y tasa de conversión.
-- **Fórmula:** `GROUP BY campaign → confirmadas, conversión`
-- **Fuente:** `campaign` + regla de confirmación + `disposition`.
-- **Limitaciones:** no incluye costo por campaña, así que mide calidad de lead, no ROI.
+### 5. Desempeño por agente
+- **Definición:** por agente: dials, answered, franjas confirmadas, citas reales, ventas, gasto, costo por venta.
+- **Fuente:** agregaciones por `agent` (sin cuentas no-persona).
+- **Limitaciones:** no normaliza por leads asignados; Carlos/Diego comparten línea (contacto no comparable).
 
-### 6. Tendencia de conversaciones confirmadas en el tiempo
-- **Definición:** conversaciones confirmadas por día.
-- **Fórmula:** `GROUP BY date(started_at) → COUNT(confirmadas)`
-- **Fuente:** `started_at` (válido) + regla de confirmación.
-- **Limitaciones:** días con poco volumen son ruidosos; las fechas futuras excluidas ya no aparecen.
+### 6. Distribución por disposición
+- **Definición:** conteo de franjas por `disposition`.
+- **Limitaciones:** describe el mix de resultados, no su calidad.
 
-### 7. Duración media de conversaciones confirmadas
-- **Definición:** duración promedio de las conversaciones confirmadas (proxy de profundidad).
-- **Fórmula:** `AVG(duration_seconds)` sobre confirmadas con duración válida.
-- **Fuente:** `duration_seconds`.
-- **Limitaciones:** duración larga no siempre es mejor; excluye duraciones negativas.
+### 7. Tendencia por día (hora local)
+- **Definición:** confirmadas, ventas y citas reales por día en America/New_York.
+- **Fórmula:** `GROUP BY date(ts_local)`.
+- **Limitaciones:** solo 14 días de datos; tendencias cortas son ruidosas.
 
-### 8. Puntaje de calidad de datos (Data Health)
-- **Definición:** porcentaje de filas del dataset crudo que superan los filtros base.
-- **Fórmula:** `filas_válidas / filas_totales_crudas`
-- **Fuente:** todo `conversations.csv`.
-- **Limitaciones:** es un indicador de higiene del dato, no de negocio; sirve para saber cuánto
-  podemos confiar en el resto del tablero.
+### 8. Salud de datos
+- **Definición:** filas de agentes reales analizadas vs. crudas, y conteo de cada señal de calidad.
+- **Fuente:** el registro de exclusiones/marcas.
+- **Limitaciones:** indicador de higiene del dato, no de negocio.

@@ -4,39 +4,41 @@ Para defender las decisiones en vivo. Respuestas cortas y directas.
 
 ---
 
-### 1. ¿Por qué 4 turnos y no 3 o 6? ¿No es arbitrario?
+### 1. Los datos vienen agregados por hora, no por conversación. ¿Cómo aplicas una regla que habla de "turnos de una conversación"?
 
-El umbral viene del enunciado del reto, así que lo implementé literal. Pero no lo defiendo como
-verdad absoluta: es un parámetro (`MIN_TURNS_FOR_CONFIRMATION`) en un solo lugar. Con datos reales
-lo calibraría mirando la distribución de turnos de conversaciones que sí terminaron en disposición
-humana, y buscaría el punto donde la señal se estabiliza. Es una decisión de producto, no de código.
+La adapto al grano del dato y lo digo explícitamente: la unidad de análisis es la **franja
+hora-agente**, no la conversación individual. Una franja cuenta como confirmada si su `disposition`
+es humana o si tiene ≥4 `speaker_turns`. No pretendo tener conversaciones individuales que el dataset
+no contiene; sería inventar granularidad. Con datos por llamada, la misma regla aplicaría por
+conversación sin cambiar el concepto.
 
-### 2. Tu regla puede tener falsos negativos: una venta real y rápida con pocos turnos y sin disposición marcada. ¿No pierdes negocio ahí?
+### 2. Reportas solo 7 citas reales pero hay 178 ventas. ¿No está roto tu cálculo?
 
-Sí, y es una decisión consciente. Preferí un sesgo **conservador**: es peor inflar la actividad que
-subestimarla, porque el dueño toma decisiones sobre estos números. Además ese caso está cubierto por
-la vía (a): si hubo venta y el agente marca `sale_closed`, cuenta aunque tenga un solo turno. El
-falso negativo real es "venta sin disposición y sin diálogo registrado", que es justamente el dato en
-el que no deberíamos confiar.
+No, está capturando un problema real del dato. Definí cita real como `disposition=appointment` **y**
+`appointment_type=appointment`. Pero `appointment_type` contradice a `disposition` en decenas de
+filas (callbacks marcados como appointment, appointments con tipo 'none'). Preferí una definición
+estricta que **expone la inconsistencia** en vez de una laxa que la esconda. Por eso el dashboard
+marca las citas como dato no confiable y recomienda no fijar metas sobre él hasta arreglar el origen.
+Las ventas vienen de otra columna (`sales`) que no depende de ese campo roto.
 
-### 3. Excluyes filas por timestamps imposibles y duplicados. ¿No estás ocultando un problema del pipeline de origen en vez de arreglarlo?
+### 3. Excluyes a "PBG Billing" y adviertes de Carlos/Diego. ¿No estás manipulando los datos a tu gusto?
 
-No lo oculto: lo registro. El panel de calidad de datos y `docs/datos_no_confiables.md` muestran
-exactamente cuántas filas caen y por qué. Excluir es la decisión correcta para no contaminar las
-métricas hoy; el registro es la señal para que ingeniería de datos arregle el origen. Separo "reportar
-confiable ahora" de "arreglar la fuente", que es un trabajo distinto.
+Al contrario: no es criterio mío, viene del `data_notes.json` que acompaña al dataset. Ahí dice que
+'PBG Billing' es `non_person_account` y que Carlos y Diego comparten teléfono. Leo esas reglas del
+JSON en vez de hardcodearlas, así que si el negocio las cambia, cambia el archivo y no el código.
+Todo lo que excluyo queda contado en el registro de datos no confiables; transparencia total.
 
-### 4. ¿Por qué calculas conversión sobre confirmadas y no sobre el total de llamadas?
+### 4. ¿Por qué "answered" no cuenta como conversación si el carrier dice que contestaron?
 
-Porque mezclar no-contactos en el denominador mide dos cosas a la vez: capacidad de contactar y
-capacidad de convertir. Sobre confirmadas, la conversión responde "cuando de verdad hablamos, ¿cuánto
-cerramos?", que es lo accionable para coaching de agentes. La capacidad de contacto ya la mide el KPI
-de contacto real por separado. Son dos preguntas distintas y las mantengo separadas.
+Porque "answered" es una señal del carrier a nivel de línea telefónica, no evidencia de diálogo. En
+los datos hay 66 franjas con `carrier_answered > 0` y `speaker_turns = 0`: contestaron pero nadie
+habló (buzón, cuelgue, IVR). Contar eso como conversación sobreestima la actividad. Por eso la regla
+usa disposición humana o densidad de turnos, y muestro la brecha (61%) en vez de ocultarla.
 
-### 5. Datos sintéticos: ¿cómo sé que esto sirve con datos reales?
+### 5. ¿Cómo sé que tu pipeline sirve si mañana cambian el formato de los datos?
 
-La lógica no sabe que los datos son sintéticos; opera sobre el esquema, no sobre valores mágicos.
-Cambiar a datos reales es reemplazar los CSV en `data/`. Generé el dataset con los mismos problemas
-que esperaría en producción (duplicados, timestamps rotos, disposiciones vacías, "answered" sin
-diálogo) precisamente para probar que el pipeline los detecta. Los tests fijan el comportamiento de la
-regla, así que un cambio de datos no rompe silenciosamente la definición.
+Dos defensas. Una, la lógica está separada de la UI y cubierta con tests que fijan el
+comportamiento: si alguien rompe la regla de confirmación o la exclusión de la cuenta no-persona, los
+tests fallan. Dos, hice un perfilado explícito (`profile_real.py`) que valida esquema, nulos, rangos
+y contradicciones; es lo primero que correría con un dataset nuevo para ver si las suposiciones
+siguen siendo válidas antes de confiar en los números.
